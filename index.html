@@ -116,22 +116,22 @@ h2.sec{font-size:12.5px;font-weight:700;color:var(--muted);margin:20px 0 9px}
 .chip{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:5px}
 .chip-i{
   width:100%;max-width:44px;aspect-ratio:1;border-radius:50%;
-  background:var(--surface-2);
+  background:#fff;
   border:2px solid var(--tc,var(--line));
   display:flex;align-items:center;justify-content:center;
   overflow:hidden;position:relative;
 }
 .chip-i img{width:70%;height:70%;object-fit:contain;display:block}
-.chip-i .fb{font-size:9px;font-weight:800;color:var(--muted);padding:0 2px;text-align:center;line-height:1.1}
+.chip-i .fb{font-size:9px;font-weight:800;color:#42536B;padding:0 2px;text-align:center;line-height:1.1}
 .chip-p{font-size:12.5px;font-weight:800;color:var(--muted);letter-spacing:-.02em}
 /* 만점 팀 — 금색 링 */
 .chip.p6 .chip-i{border-color:var(--gold);box-shadow:0 0 0 3px rgba(245,190,74,.14)}
 .chip.p6 .chip-p{color:var(--gold)}
 .chip.hit .chip-p{color:var(--text)}
-/* 놓친 팀 — 색을 빼고 가라앉힌다 */
-.chip.miss{opacity:.55}
-.chip.miss .chip-i{border-color:var(--line)}
-.chip.miss img{filter:grayscale(1) brightness(1.15)}
+/* 놓친 팀 — 채도만 뺀다.
+   칩 전체에 opacity 를 걸면 흰 원까지 배경에 섞여 어느 팀인지 알아볼 수 없게 된다. */
+.chip.miss .chip-i{border-color:var(--line);background:#DFE5ED}
+.chip.miss img{filter:grayscale(.7)}
 
 /* 펼친 내역 */
 .bd{display:none;margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
@@ -164,6 +164,9 @@ h2.sec{font-size:12.5px;font-weight:700;color:var(--muted);margin:20px 0 9px}
 .t-tm{cursor:pointer}
 .tm-row{display:flex;align-items:center;gap:9px}
 .tlogo{width:23px;height:23px;flex:none;object-fit:contain}
+/* 어두운 바탕에 그냥 두면 남색·진빨강 로고가 묻힌다. 흰 원 위에 올린다. */
+.tlogo,.fx-lg,.bd-lg,.pr-lg{background:#fff;border-radius:50%;padding:2px}
+.sheet-hd img{background:#fff;border-radius:50%;padding:3px}
 .tm-nm{font-weight:700;letter-spacing:-.01em}
 .t-pts{font-weight:800;width:34px}
 .t-num{color:var(--muted);width:32px;font-size:13px}
