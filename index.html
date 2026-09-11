@@ -213,6 +213,17 @@ h2.sec{font-size:12.5px;font-weight:700;color:var(--muted);margin:20px 0 9px}
 .pr.lead .bar i{background:var(--gold)}
 .pr-sub{font-size:11.5px;color:var(--muted);margin-top:6px}
 
+/* ---------- 버튼 ---------- */
+.run{
+  display:block;width:100%;margin-top:4px;padding:13px;
+  border-radius:12px;border:1px solid var(--line);
+  background:var(--surface);color:var(--text);
+  font:inherit;font-weight:700;font-size:14.5px;letter-spacing:-.01em;
+  cursor:pointer;transition:background .15s;
+}
+.run:active{background:var(--surface-2)}
+.run:disabled{color:var(--muted);cursor:default}
+
 /* ---------- 로딩 / 진행 ---------- */
 .loading{text-align:center;padding:38px 16px;color:var(--muted);font-size:13.5px}
 .loading b{color:var(--text);font-weight:700}
@@ -710,7 +721,7 @@ function simulate(current, fixtures, elo, runs, onProgress, done){
    7) 상태
    ============================================================ */
 const S = { cur:null, prev:null, fixtures:null, elo:null, sim:null, byId:{}, unresolved:[],
-            lbMode:'now', tblMode:'now' };
+            lbMode:'now', tblMode:'now', simAt:null };
 const koName = id => (TEAM_KO[id] ? TEAM_KO[id].ko : ((S.byId[id] || {}).short || id));
 const koShort = id => (TEAM_KO[id] ? (TEAM_KO[id].s || TEAM_KO[id].ko) : koName(id));
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -766,6 +777,7 @@ function ensureSim(onProgress){
       try{
         S.sim = await new Promise(res =>
           simulate(S.cur, S.fixtures, S.elo, CFG.simRuns, f => tick(0.3 + f*0.7), res));
+        S.simAt = new Date();
       } finally {
         PREDICTIONS.forEach((p, i) => { p.picks = original[i]; });
       }
@@ -873,7 +885,7 @@ function renderLeaderboard(){
   document.getElementById("lb-note").innerHTML = S.unresolved.length
     ? '<span style="color:var(--coral)">팀 이름을 찾지 못했습니다 — ' + esc(S.unresolved.join(", ")) + "</span>"
     : (proj
-        ? "시즌이 지금 흐름대로 끝났다고 볼 때의 점수입니다. 우승 확률은 1만 번 중 실제로 1등한 비율이라, 이 표의 순위와 다를 수 있습니다."
+        ? "시즌이 지금 흐름대로 끝났다고 볼 때의 점수입니다. 우승 확률은 전체 시뮬레이션 중 실제로 1등한 비율이라, 이 표의 순위와 다를 수 있습니다."
         : "지금 순위가 그대로 마감됐다고 볼 때의 점수입니다. 팀당 최대 6점, 5팀 합쳐 30점 만점.") +
       " 로고를 누르지 않아도 되고, 카드를 누르면 팀별 득점 내역이 펼쳐집니다.";
 
@@ -1017,13 +1029,38 @@ function renderForecast(){
   box.innerHTML =
     '<h2 class="sec">내기에서 1위 할 확률</h2><div class="prob">' + winHtml + "</div>" +
     '<p class="note">기대 점수가 높은 사람과 우승 확률이 높은 사람은 다를 수 있습니다. ' +
-    '기대 점수는 1만 번의 <b>평균</b>이고, 우승 확률은 그중 <b>실제로 1등한 횟수</b>입니다. ' +
+    '기대 점수는 ' + CFG.simRuns.toLocaleString() + '번의 <b>평균</b>이고, ' +
+    '우승 확률은 그중 <b>실제로 1등한 횟수</b>입니다. ' +
     '드물게 터지는 픽은 평균을 끌어올리지만 매번 이기지는 못합니다. ' +
     '내기는 평균이 아니라 그 판의 최고점으로 가리므로 우승 확률 쪽이 실제 승부에 가깝습니다.</p>' +
     '<h2 class="sec">팀별 5위 안 진입 확률</h2><div class="prob">' + teamHtml + "</div>" +
     '<p class="note">25-26 최종 성적으로 팀 실력(Elo)을 잡고 올 시즌 경기로 보정한 뒤, ' +
     '남은 경기를 ' + CFG.simRuns.toLocaleString() + '번 시뮬레이션한 결과입니다. ' +
-    '난수를 쓰기 때문에 다시 계산하면 숫자가 조금씩 달라집니다.</p>';
+    '난수를 쓰기 때문에 다시 계산하면 숫자가 조금씩 달라집니다.' +
+    (S.simAt ? " 마지막 계산 " + hhmm(S.simAt) + "." : "") + "</p>" +
+    '<button class="run" id="recalc">최신 결과로 다시 계산</button>' +
+    '<div class="prog" id="recalc-prog"><i></i></div>' +
+    '<p class="note">주말 경기가 끝난 뒤 이 버튼을 누르면 앱을 닫지 않고도 ' +
+    '최신 순위와 예측을 다시 받아옵니다.</p>';
+
+  const btn = document.getElementById("recalc");
+  if (btn) btn.addEventListener("click", async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "다시 계산하는 중";
+    const prog = document.getElementById("recalc-prog");
+    const bar = prog ? prog.querySelector("i") : null;
+    if (prog) prog.classList.add("on");
+    try{
+      await recalcAll(f => { if (bar) bar.style.width = (f*100).toFixed(1) + "%"; });
+      renderForecast();
+    }catch(e){
+      btn.disabled = false;
+      btn.textContent = "최신 결과로 다시 계산";
+      if (prog) prog.classList.remove("on");
+      alert("다시 계산하지 못했습니다 — " + e.message);
+    }
+  });
 }
 
 /* ============================================================
@@ -1170,15 +1207,39 @@ document.getElementById("tabs").addEventListener("click", async e => {
 /* ============================================================
    15) 부팅
    ============================================================ */
+const hhmm = d => String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
+function updateMeta(){
+  const gp = Math.max.apply(null, S.cur.map(t => t.gp));
+  document.getElementById("meta").innerHTML =
+    "<b>" + gp + "R</b> · " + hhmm(new Date()) + " 기준";
+}
+
+/* 경기가 끝난 뒤 앱을 닫지 않고도 최신 결과를 반영한다.
+   받아둔 응답 캐시까지 비워야 진짜 최신이 온다. */
+async function recalcAll(onStep){
+  try{
+    for (const k of Object.keys(sessionStorage)){
+      if (k.indexOf("eplbet:") === 0) sessionStorage.removeItem(k);
+    }
+  }catch(e){}
+  S.sim = null; simPromise = null; simProgressCb = null;
+  S.fixtures = null; S.prev = null; S.elo = null;
+
+  if (onStep) onStep(0.05);
+  S.cur = await fetchStandings(CFG.season);
+  S.cur.forEach(t => { S.byId[t.id] = t; });
+  updateMeta();
+
+  await ensureSim(f => { if (onStep) onStep(0.1 + f * 0.9); });
+  renderLeaderboard();
+  renderTable();
+}
+
 async function boot(){
   try{
     S.cur = await fetchStandings(CFG.season);
     S.cur.forEach(t => { S.byId[t.id] = t; });
-    const gp = Math.max.apply(null, S.cur.map(t => t.gp));
-    const now = new Date();
-    document.getElementById("meta").innerHTML =
-      "<b>" + gp + "R</b> · " +
-      String(now.getHours()).padStart(2,"0") + ":" + String(now.getMinutes()).padStart(2,"0") + " 기준";
+    updateMeta();
     renderLeaderboard();
     renderTable();
   }catch(e){

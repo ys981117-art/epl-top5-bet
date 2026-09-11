@@ -60,7 +60,7 @@ const ctx = {
 };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
-vm.runInContext(code + "\n;globalThis.__x = {TBL_W,TBL_WD,gauss,openTeam,openFixtures,renderFixtures,renderTable,renderLeaderboard,evState,compScore,getJSON,API,teamPoints,scoreOne,rankPlayers,matchProbs,simulate,buildElo,applyPlayedMatches,resolveTeamId,resolvePredictions,fetchStandings,fetchAllFixtures,rankMapFrom,S,CFG,PREDICTIONS,TEAM_KO};", ctx);
+vm.runInContext(code + "\n;globalThis.__x = {TBL_W,TBL_WD,gauss,recalcAll,renderForecast,openTeam,openFixtures,renderFixtures,renderTable,renderLeaderboard,evState,compScore,getJSON,API,teamPoints,scoreOne,rankPlayers,matchProbs,simulate,buildElo,applyPlayedMatches,resolveTeamId,resolvePredictions,fetchStandings,fetchAllFixtures,rankMapFrom,S,CFG,PREDICTIONS,TEAM_KO};", ctx);
 const X = ctx.__x;
 
 /* ============================================================ */
@@ -355,7 +355,37 @@ if (cur){
   X.S.fixtures = null;
 }
 
-console.log("\n[13] 로고 가독성 (어두운 화면에서 묻히지 않는가)");
+console.log("\n[13] 다시 계산 — 앱을 닫지 않고 최신 결과 반영");
+if (cur && fixtures){
+  X.S.cur = cur; cur.forEach(t => { X.S.byId[t.id] = t; });
+  X.S.fixtures = fixtures;
+
+  const prevSim = X.S.sim;
+  X.S.simAt = null;
+  let sawProgress = false;
+  await X.recalcAll(f => { if (f > 0 && f <= 1) sawProgress = true; });
+
+  T("다시 계산하면 시뮬레이션 결과가 새로 나온다", !!X.S.sim && X.S.sim !== prevSim);
+  T("현재 순위를 다시 받아온다", X.S.cur.length === 20);
+  T("시즌 일정도 다시 받아온다", X.S.fixtures && X.S.fixtures.length === 380,
+    X.S.fixtures ? X.S.fixtures.length + "경기" : "없음");
+  T("계산 시각이 기록된다", !!X.S.simAt);
+  T("진행률이 보고된다", sawProgress);
+  T("다시 계산한 결과도 확률 합이 맞다",
+    Math.abs(X.S.sim.players.reduce((a,p)=>a+p.winPct,0) - 1) < 1e-6);
+  T("다시 계산한 결과도 top5 확률 합이 5",
+    Math.abs(X.S.sim.teams.reduce((a,t)=>a+t.top5,0) - 5) < 0.01);
+
+  // 결과가 준비된 뒤의 예측 탭 화면
+  X.renderForecast();
+  const fcHtml = getEl("fc-body").innerHTML;
+  T("예측 탭에 다시 계산 버튼이 있다", fcHtml.indexOf('id="recalc"') >= 0);
+  T("마지막 계산 시각을 보여준다", fcHtml.indexOf("마지막 계산") >= 0);
+  T("우승 확률과 팀 확률이 함께 나온다",
+    fcHtml.indexOf("1위 할 확률") >= 0 && fcHtml.indexOf("5위 안 진입 확률") >= 0);
+}
+
+console.log("\n[14] 로고 가독성 (어두운 화면에서 묻히지 않는가)");
 {
   // 토트넘(남색)·리버풀(진빨강)·노팅엄은 어두운 바탕에 그대로 두면 형체가 사라진다.
   // 로고가 놓이는 모든 자리는 흰 원 위에 있어야 한다.
@@ -372,13 +402,17 @@ console.log("\n[13] 로고 가독성 (어두운 화면에서 묻히지 않는가
     !/\.chip\.miss\{[^}]*opacity/.test(css.replace(/\s+/g, "")),
     "칩 전체를 투명하게 만들면 흰 원이 사라져 로고가 회색 덩어리가 된다");
   T("놓친 팀은 채도만 낮춤", css.indexOf("grayscale(") >= 0);
+  // 클래스만 붙고 스타일이 없으면 브라우저 기본 흰 버튼이 튀어나온다 (실제로 겪음)
+  T("다시 계산 버튼에 스타일이 정의돼 있다",
+    /\.run\{[^}]*background:var\(--surface\)/.test(css.replace(/\s+/g, "")),
+    "'.run' 스타일 누락");
   // 20팀 전부 색이 정의되어 있어야 링이 회색으로 떨어지지 않는다
   const noColor = Object.keys(X.TEAM_KO).filter(k => !X.TEAM_KO[k].c);
   T("20팀 모두 브랜드 컬러 보유", noColor.length === 0, noColor.join(", "));
   T("팀 수가 20팀", Object.keys(X.TEAM_KO).length === 20);
 }
 
-console.log("\n[14] 홈 화면 앱(PWA) 구성");
+console.log("\n[15] 홈 화면 앱(PWA) 구성");
 try{
   const mfRaw = fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8");
   const mf = JSON.parse(mfRaw);
@@ -405,7 +439,7 @@ try{
   T("하단 탭도 safe-area 대응", /env\(safe-area-inset-bottom\)/.test(html));
 }catch(e){ T("PWA 구성", false, e.message); }
 
-console.log("\n[15] 사내 정보 누출 검사 (AC-13)");
+console.log("\n[16] 사내 정보 누출 검사 (AC-13)");
 const banned = ["fnf","dcs","dcsai","kg/","snowflake","mlb","discovery","duvetica","sergio",
   "internal","사내","dcs_sk","x-access-token","weekly dashboard"];
 const lower = html.toLowerCase();
