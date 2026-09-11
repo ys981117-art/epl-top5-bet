@@ -60,7 +60,7 @@ const ctx = {
 };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
-vm.runInContext(code + "\n;globalThis.__x = {TBL_W,TBL_WD,gauss,evState,compScore,getJSON,API,teamPoints,scoreOne,rankPlayers,matchProbs,simulate,buildElo,applyPlayedMatches,resolveTeamId,resolvePredictions,fetchStandings,fetchAllFixtures,rankMapFrom,S,CFG,PREDICTIONS,TEAM_KO};", ctx);
+vm.runInContext(code + "\n;globalThis.__x = {TBL_W,TBL_WD,gauss,openFixtures,renderFixtures,renderTable,renderLeaderboard,evState,compScore,getJSON,API,teamPoints,scoreOne,rankPlayers,matchProbs,simulate,buildElo,applyPlayedMatches,resolveTeamId,resolvePredictions,fetchStandings,fetchAllFixtures,rankMapFrom,S,CFG,PREDICTIONS,TEAM_KO};", ctx);
 const X = ctx.__x;
 
 /* ============================================================ */
@@ -294,7 +294,34 @@ try{
   })());
 }catch(e){ T("응답 구조 검사", false, e.message); }
 
-console.log("\n[11] 홈 화면 앱(PWA) 구성");
+console.log("\n[11] 탭 진입 회귀 — 예측을 먼저 봐도 일정이 그려지는가");
+if (cur && fixtures){
+  X.S.cur = cur; cur.forEach(t => { X.S.byId[t.id] = t; });
+  const fxBox = getEl("fx-body");
+
+  // 1) 아직 일정이 없을 때 — 받아와서 그린다
+  X.S.fixtures = null;
+  fxBox.innerHTML = "(초기 상태)";
+  await X.openFixtures();
+  T("일정이 없으면 받아와서 그린다",
+    fxBox.innerHTML.indexOf("다가올 경기") >= 0 && X.S.fixtures && X.S.fixtures.length === 380,
+    "본문 길이 " + fxBox.innerHTML.length);
+
+  // 2) 마감 예측 시뮬레이션이 이미 일정을 채워둔 경우 — 실제로 났던 버그.
+  //    "아직 없을 때만" 그리도록 되어 있어 탭이 빈 채로 남았다.
+  X.S.fixtures = fixtures;
+  fxBox.innerHTML = "(초기 상태)";
+  await X.openFixtures();
+  T("이미 일정을 갖고 있어도 그린다 (빈 탭 회귀 방지)",
+    fxBox.innerHTML.indexOf("다가올 경기") >= 0 && fxBox.innerHTML.indexOf("최근 결과") >= 0,
+    "실제 본문: " + fxBox.innerHTML.slice(0, 90));
+  T("경기 카드가 실제로 만들어짐",
+    (fxBox.innerHTML.match(/class="fx"/g) || []).length > 10,
+    (fxBox.innerHTML.match(/class="fx"/g) || []).length + "개");
+  T("일정에도 팀 로고가 들어감", fxBox.innerHTML.indexOf("teamlogos/soccer") >= 0);
+}
+
+console.log("\n[12] 홈 화면 앱(PWA) 구성");
 try{
   const mfRaw = fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8");
   const mf = JSON.parse(mfRaw);
@@ -321,7 +348,7 @@ try{
   T("하단 탭도 safe-area 대응", /env\(safe-area-inset-bottom\)/.test(html));
 }catch(e){ T("PWA 구성", false, e.message); }
 
-console.log("\n[12] 사내 정보 누출 검사 (AC-13)");
+console.log("\n[13] 사내 정보 누출 검사 (AC-13)");
 const banned = ["fnf","dcs","dcsai","kg/","snowflake","mlb","discovery","duvetica","sergio",
   "internal","사내","dcs_sk","x-access-token","weekly dashboard"];
 const lower = html.toLowerCase();
