@@ -301,8 +301,8 @@ try{
   T("manifest.json 이 유효한 JSON", true);
   T("전체화면으로 열림 (display: standalone)", mf.display === "standalone", mf.display);
   T("시작 주소가 실제 파일", fs.existsSync(path.join(__dirname, mf.start_url.replace("./",""))));
-  T("배경/테마색이 앱 배경과 같음",
-    mf.background_color === "#0D1826" && mf.theme_color === "#0D1826");
+  T("스플래시=EPL 퍼플, 테마색=앱 배경",
+    mf.background_color === "#37003C" && mf.theme_color === "#0B1420");
   const missing = mf.icons.filter(i => !fs.existsSync(path.join(__dirname, i.src.replace("./",""))));
   T("manifest 가 가리키는 아이콘이 전부 존재", missing.length === 0, missing.map(i=>i.src).join(", "));
   T("마스커블 아이콘 있음 (안드로이드 원형 크롭 대비)",
@@ -330,9 +330,9 @@ T("산출물에 사내 관련 문자열 없음", hits.length === 0, hits.join(",
 T("외부 스크립트/스타일 참조 없음",
   !/<script[^>]+src=/i.test(html) && !/<link[^>]+stylesheet/i.test(html));
 T("API 키/시크릿 문자열 없음", !/(api[_-]?key|secret|token|bearer)\s*[:=]\s*["'][^"']+/i.test(html));
-T("호출 도메인이 espn.com 뿐",
+T("호출 도메인이 ESPN 뿐 (데이터 + 로고 CDN)",
   [...html.matchAll(/https?:\/\/([a-z0-9.\-]+)/gi)].map(x=>x[1])
-    .every(h => h.endsWith("espn.com")),
+    .every(h => h.endsWith("espn.com") || h.endsWith("espncdn.com")),
   [...new Set([...html.matchAll(/https?:\/\/([a-z0-9.\-]+)/gi)].map(x=>x[1]))].join(", "));
 
 console.log("\n" + "=".repeat(52));
