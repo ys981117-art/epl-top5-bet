@@ -1,0 +1,17 @@
+{
+  "name": "EPL 26-27 TOP5 내기",
+  "short_name": "TOP5 내기",
+  "description": "프리미어리그 26-27 시즌 1~5위 맞추기 내기 점수판",
+  "lang": "ko",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0D1826",
+  "theme_color": "#0D1826",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
