@@ -60,7 +60,7 @@ const ctx = {
 };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
-vm.runInContext(code + "\n;globalThis.__x = {TBL_W,TBL_WD,gauss,recalcAll,renderForecast,openTeam,openFixtures,renderFixtures,renderTable,renderLeaderboard,evState,compScore,getJSON,API,teamPoints,scoreOne,rankPlayers,matchProbs,simulate,buildElo,applyPlayedMatches,resolveTeamId,resolvePredictions,fetchStandings,fetchAllFixtures,rankMapFrom,S,CFG,PREDICTIONS,TEAM_KO};", ctx);
+vm.runInContext(code + "\n;globalThis.__x = {TBL_W,TBL_WD,gauss,liveAlreadyCounted,renderFixtures,recalcAll,renderForecast,openTeam,openFixtures,renderFixtures,renderTable,renderLeaderboard,evState,compScore,getJSON,API,teamPoints,scoreOne,rankPlayers,matchProbs,simulate,buildElo,applyPlayedMatches,resolveTeamId,resolvePredictions,fetchStandings,fetchAllFixtures,rankMapFrom,S,CFG,PREDICTIONS,TEAM_KO};", ctx);
 const X = ctx.__x;
 
 /* ============================================================ */
@@ -355,7 +355,77 @@ if (cur){
   X.S.fixtures = null;
 }
 
-console.log("\n[13] 다시 계산 — 앱을 닫지 않고 최신 결과 반영");
+console.log("\n[13] 경기 진행 중일 때 (합성 데이터로 검증)");
+if (cur && fixtures){
+  // 지금은 A매치 휴식기라 진행 중인 경기가 실제로 없다.
+  // 순위표가 라이브로 반영하는 경우와 아닌 경우를 모두 만들어 확인한다.
+  const LIVE_N = 3;
+  const played = fixtures.filter(f => f.state === "post").length;
+  const synth = fixtures.map(f => Object.assign({}, f));
+  let turned = 0;
+  for (const f of synth){
+    if (f.state === "pre" && turned < LIVE_N){
+      f.state = "in"; f.homeScore = 1; f.awayScore = 0; turned++;
+    }
+  }
+  T("합성: 진행 중 경기 " + LIVE_N + "건을 만들었다",
+    synth.filter(f => f.state === "in").length === LIVE_N);
+
+  const gpNow = cur.reduce((a,t) => a + t.gp, 0);
+  T("진행 중 경기가 없으면 판별은 항상 '미반영'",
+    X.liveAlreadyCounted(cur, fixtures) === false);
+
+  // (가) 순위표가 아직 진행 중 경기를 안 셌다 — 지금 실제 데이터가 이 상태
+  T("순위표가 진행 중 경기를 안 셌으면 미반영으로 판정",
+    X.liveAlreadyCounted(cur, synth) === false, "gp합 " + gpNow);
+
+  // (나) 순위표가 진행 중 경기까지 셌다고 가정
+  const curLive = cur.map(t => Object.assign({}, t));
+  let bumped = 0;
+  for (const f of synth){
+    if (f.state !== "in") continue;
+    for (const t of curLive) if (t.id === f.homeId || t.id === f.awayId){ t.gp += 1; bumped++; }
+  }
+  T("합성: 순위표 경기수를 " + bumped + "회 올렸다", bumped === LIVE_N * 2);
+  T("순위표가 진행 중 경기를 셌으면 반영으로 판정",
+    X.liveAlreadyCounted(curLive, synth) === true,
+    "gp합 " + curLive.reduce((a,t)=>a+t.gp,0) + " vs 기대 " + (played + LIVE_N) * 2);
+
+  // 시뮬레이션이 실제로 그 경기를 빼는지 — 이중 계산 방지의 핵심
+  const elo2 = X.applyPlayedMatches(X.buildElo(prev, cur), fixtures);
+  const runA = await new Promise(res => X.simulate(cur, synth, elo2, 200, null, res));
+  const runB = await new Promise(res => X.simulate(curLive, synth, elo2, 200, null, res));
+  T("미반영이면 진행 중 경기도 시뮬레이션한다",
+    runA.skippedLive === false && runA.remaining === 380 - played,
+    "남은 " + runA.remaining + " / 기대 " + (380 - played));
+  T("반영이면 진행 중 경기를 빼고 시뮬레이션한다 (이중 계산 방지)",
+    runB.skippedLive === true && runB.remaining === 380 - played - LIVE_N,
+    "남은 " + runB.remaining + " / 기대 " + (380 - played - LIVE_N));
+  T("두 경우의 잔여 경기 수 차이가 정확히 진행 중 경기 수",
+    runA.remaining - runB.remaining === LIVE_N);
+
+  // 화면: 진행 중 경기는 시작 시각이 아니라 현재 스코어로 나와야 한다
+  X.S.cur = cur; X.S.fixtures = synth;
+  X.renderFixtures();
+  const fx = getEl("fx-body").innerHTML;
+  T("일정 탭에 '지금 진행 중' 구역이 생긴다", fx.indexOf("지금 진행 중") >= 0);
+  T("진행 중 경기는 현재 스코어로 표시된다", fx.indexOf("fx-s now") >= 0);
+  T("진행 중 경기가 '다가올 경기'에 중복되지 않는다",
+    (fx.match(/fx-s now/g) || []).length === LIVE_N,
+    (fx.match(/fx-s now/g) || []).length + "건");
+  T("헤더가 진행 중 경기 수를 알린다",
+    getEl("meta").innerHTML.indexOf("경기 진행 중") >= 0,
+    getEl("meta").innerHTML);
+  // 진행 중 경기가 없는 평상시에는 시각 기준으로 돌아간다
+  X.S.fixtures = fixtures;
+  X.renderFixtures();
+  T("진행 중이 없으면 헤더는 시각 기준으로 돌아간다",
+    getEl("meta").innerHTML.indexOf("기준") >= 0 &&
+    getEl("meta").innerHTML.indexOf("경기 진행 중") < 0);
+  X.S.fixtures = fixtures;
+}
+
+console.log("\n[14] 다시 계산 — 앱을 닫지 않고 최신 결과 반영");
 if (cur && fixtures){
   X.S.cur = cur; cur.forEach(t => { X.S.byId[t.id] = t; });
   X.S.fixtures = fixtures;
@@ -385,7 +455,7 @@ if (cur && fixtures){
     fcHtml.indexOf("1위 할 확률") >= 0 && fcHtml.indexOf("5위 안 진입 확률") >= 0);
 }
 
-console.log("\n[14] 로고 가독성 (어두운 화면에서 묻히지 않는가)");
+console.log("\n[15] 로고 가독성 (어두운 화면에서 묻히지 않는가)");
 {
   // 토트넘(남색)·리버풀(진빨강)·노팅엄은 어두운 바탕에 그대로 두면 형체가 사라진다.
   // 로고가 놓이는 모든 자리는 흰 원 위에 있어야 한다.
@@ -412,7 +482,7 @@ console.log("\n[14] 로고 가독성 (어두운 화면에서 묻히지 않는가
   T("팀 수가 20팀", Object.keys(X.TEAM_KO).length === 20);
 }
 
-console.log("\n[15] 홈 화면 앱(PWA) 구성");
+console.log("\n[16] 홈 화면 앱(PWA) 구성");
 try{
   const mfRaw = fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8");
   const mf = JSON.parse(mfRaw);
@@ -439,7 +509,7 @@ try{
   T("하단 탭도 safe-area 대응", /env\(safe-area-inset-bottom\)/.test(html));
 }catch(e){ T("PWA 구성", false, e.message); }
 
-console.log("\n[16] 사내 정보 누출 검사 (AC-13)");
+console.log("\n[17] 사내 정보 누출 검사 (AC-13)");
 const banned = ["fnf","dcs","dcsai","kg/","snowflake","mlb","discovery","duvetica","sergio",
   "internal","사내","dcs_sk","x-access-token","weekly dashboard"];
 const lower = html.toLowerCase();

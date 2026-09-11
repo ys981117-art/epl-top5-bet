@@ -197,6 +197,13 @@ h2.sec{font-size:12.5px;font-weight:700;color:var(--muted);margin:20px 0 9px}
   background:var(--surface-2);border-radius:7px;padding:3px 6px;
 }
 .fx-s.sched{background:transparent;color:var(--muted);font-weight:700;font-size:12.5px}
+.fx.live{border-color:rgba(240,121,110,.5)}
+.fx-s.now{background:rgba(240,121,110,.18);color:var(--coral)}
+.sec.live-h{color:var(--coral)}
+.live-dot{
+  display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--coral);margin-right:5px;vertical-align:1px;
+}
 
 /* ---------- 확률 ---------- */
 .prob{display:flex;flex-direction:column;gap:8px}
@@ -590,6 +597,18 @@ function gauss(){
   gaussSpare = v * f;
   return u * f;
 }
+/* 경기가 진행 중일 때, 순위표가 그 경기를 이미 셈에 넣었는지 데이터로 판별한다.
+   이미 반영됐는데 시뮬레이션에서 또 돌리면 같은 경기를 두 번 세게 된다.
+   판정 근거: 리그 전체 '치른 경기 수'의 합은 경기 수의 두 배여야 한다. */
+function liveAlreadyCounted(current, fixtures){
+  const live = fixtures.filter(f => f.state === "in").length;
+  if (!live) return false;
+  const post = fixtures.filter(f => f.state === "post").length;
+  const gpSum = current.reduce((s, t) => s + t.gp, 0);
+  if (gpSum === (post + live) * 2) return true;   // 순위표가 진행 중 경기까지 셌다
+  return false;                                    // 경기가 끝나야 반영된다
+}
+
 function simulate(current, fixtures, elo, runs, onProgress, done){
   const ids = current.map(t => t.id);
   const n = ids.length;
@@ -601,8 +620,11 @@ function simulate(current, fixtures, elo, runs, onProgress, done){
   const baseGf  = new Float64Array(n);
   current.forEach(t => { basePts[idx[t.id]] = t.pts; baseGd[idx[t.id]] = t.gd; baseGf[idx[t.id]] = t.gf; });
 
+  // 순위표가 진행 중 경기를 이미 반영했다면 그 경기는 다시 돌리지 않는다
+  const skipLive = liveAlreadyCounted(current, fixtures);
   const rem = fixtures.filter(f =>
-    f.state !== "post" && idx[f.homeId] !== undefined && idx[f.awayId] !== undefined);
+    f.state !== "post" && !(skipLive && f.state === "in") &&
+    idx[f.homeId] !== undefined && idx[f.awayId] !== undefined);
   const remH = new Int32Array(rem.length), remA = new Int32Array(rem.length);
   rem.forEach((f,i) => { remH[i] = idx[f.homeId]; remA[i] = idx[f.awayId]; });
 
@@ -708,6 +730,8 @@ function simulate(current, fixtures, elo, runs, onProgress, done){
       done({
         teams,
         projRank,
+        remaining: remH.length,        // 실제로 시뮬레이션한 남은 경기 수
+        skippedLive: skipLive,
         players: players.map(p => ({
           name: p.name, avg: p.sum/runs, winPct: p.wins/runs, hist: Array.from(p.hist)
         }))
@@ -961,8 +985,9 @@ function renderTable(){
    11) 일정
    ============================================================ */
 function renderFixtures(){
+  const live = S.fixtures.filter(f => f.state === "in");
   const past = S.fixtures.filter(f => f.state === "post").slice(-10).reverse();
-  const next = S.fixtures.filter(f => f.state !== "post").slice(0, 20);
+  const next = S.fixtures.filter(f => f.state === "pre").slice(0, 20);
 
   const side = (id, right, win) =>
     '<div class="fx-t' + (right ? " r" : "") + (win ? " win" : "") + '">' +
@@ -970,10 +995,17 @@ function renderFixtures(){
            : logoTag(id, "fx-lg") + "<span>" + esc(koName(id)) + "</span>") + "</div>";
 
   const one = f => {
-    if (f.state === "post"){
+    const hasScore = f.homeScore != null && f.awayScore != null;
+    if (f.state === "post" && hasScore){
       return '<div class="fx">' + side(f.homeId, true, f.homeScore > f.awayScore) +
         '<div class="fx-s num">' + f.homeScore + " : " + f.awayScore + "</div>" +
         side(f.awayId, false, f.awayScore > f.homeScore) + "</div>";
+    }
+    // 진행 중이면 시작 시각이 아니라 지금 스코어를 보여준다
+    if (f.state === "in" && hasScore){
+      return '<div class="fx live">' + side(f.homeId, true, false) +
+        '<div class="fx-s now num">' + f.homeScore + " : " + f.awayScore + "</div>" +
+        side(f.awayId, false, false) + "</div>";
     }
     const d = new Date(f.date);
     const hh = String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
@@ -991,7 +1023,9 @@ function renderFixtures(){
     }
     return out || '<div class="msg">경기가 없습니다</div>';
   };
+  updateMeta();
   document.getElementById("fx-body").innerHTML =
+    (live.length ? '<h2 class="sec live-h">지금 진행 중</h2>' + live.map(one).join("") : "") +
     '<h2 class="sec">다가올 경기</h2>' + group(next) +
     '<h2 class="sec">최근 결과</h2>' + group(past);
 }
@@ -1210,8 +1244,11 @@ document.getElementById("tabs").addEventListener("click", async e => {
 const hhmm = d => String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
 function updateMeta(){
   const gp = Math.max.apply(null, S.cur.map(t => t.gp));
+  const live = S.fixtures ? S.fixtures.filter(f => f.state === "in").length : 0;
   document.getElementById("meta").innerHTML =
-    "<b>" + gp + "R</b> · " + hhmm(new Date()) + " 기준";
+    "<b>" + gp + "R</b> · " +
+    (live ? '<span class="live-dot"></span>' + live + "경기 진행 중"
+          : hhmm(new Date()) + " 기준");
 }
 
 /* 경기가 끝난 뒤 앱을 닫지 않고도 최신 결과를 반영한다.
@@ -1231,6 +1268,7 @@ async function recalcAll(onStep){
   updateMeta();
 
   await ensureSim(f => { if (onStep) onStep(0.1 + f * 0.9); });
+  updateMeta();
   renderLeaderboard();
   renderTable();
 }
