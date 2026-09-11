@@ -60,7 +60,7 @@ const ctx = {
 };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
-vm.runInContext(code + "\n;globalThis.__x = {TBL_W,TBL_WD,gauss,openFixtures,renderFixtures,renderTable,renderLeaderboard,evState,compScore,getJSON,API,teamPoints,scoreOne,rankPlayers,matchProbs,simulate,buildElo,applyPlayedMatches,resolveTeamId,resolvePredictions,fetchStandings,fetchAllFixtures,rankMapFrom,S,CFG,PREDICTIONS,TEAM_KO};", ctx);
+vm.runInContext(code + "\n;globalThis.__x = {TBL_W,TBL_WD,gauss,openTeam,openFixtures,renderFixtures,renderTable,renderLeaderboard,evState,compScore,getJSON,API,teamPoints,scoreOne,rankPlayers,matchProbs,simulate,buildElo,applyPlayedMatches,resolveTeamId,resolvePredictions,fetchStandings,fetchAllFixtures,rankMapFrom,S,CFG,PREDICTIONS,TEAM_KO};", ctx);
 const X = ctx.__x;
 
 /* ============================================================ */
@@ -321,7 +321,41 @@ if (cur && fixtures){
   T("일정에도 팀 로고가 들어감", fxBox.innerHTML.indexOf("teamlogos/soccer") >= 0);
 }
 
-console.log("\n[12] 로고 가독성 (어두운 화면에서 묻히지 않는가)");
+console.log("\n[12] 팀 시트 — 예정 경기가 나오는가");
+if (cur){
+  // 팀 일정 API 는 기본 호출이 치른 경기만 준다. 예정 경기는 fixture=true 가 따로 있다.
+  const base = X.API + "/site/v2/sports/soccer/eng.1/teams/382/schedule";
+  const past = await X.getJSON(base);
+  const next = await X.getJSON(base + "?fixture=true");
+  const stateOf = ev => X.evState(ev, (ev.competitions || [])[0]);
+  T("기본 호출은 치른 경기만 준다 (그래서 폴백이 필요하다)",
+    (past.events || []).length > 0 && (past.events || []).every(e => stateOf(e) === "post"),
+    (past.events || []).length + "경기");
+  T("fixture=true 는 예정 경기를 준다",
+    (next.events || []).length > 0 && (next.events || []).every(e => stateOf(e) !== "post"),
+    (next.events || []).length + "경기");
+
+  // 시즌 전체 일정을 아직 안 받은 상태에서 팀 시트를 열어도 예정 경기가 보여야 한다
+  X.S.fixtures = null;
+  await X.openTeam("382");
+  const sheet = getEl("sheet-in").innerHTML;
+  T("전체 일정이 없어도 팀 시트에 예정 경기가 나온다 (빈 예정 회귀 방지)",
+    sheet.indexOf("fx-s sched") >= 0,
+    "예정 경기 표시 없음");
+  T("팀 시트에 지난 결과도 함께 나온다", /fx-s num/.test(sheet));
+  T("팀 시트에 선수단이 나온다", sheet.indexOf("선수단") >= 0);
+
+  // 전체 일정을 이미 갖고 있으면 그쪽을 쓴다
+  if (fixtures){
+    X.S.fixtures = fixtures;
+    await X.openTeam("382");
+    const sheet2 = getEl("sheet-in").innerHTML;
+    T("전체 일정을 갖고 있을 때도 예정 경기가 나온다", sheet2.indexOf("fx-s sched") >= 0);
+  }
+  X.S.fixtures = null;
+}
+
+console.log("\n[13] 로고 가독성 (어두운 화면에서 묻히지 않는가)");
 {
   // 토트넘(남색)·리버풀(진빨강)·노팅엄은 어두운 바탕에 그대로 두면 형체가 사라진다.
   // 로고가 놓이는 모든 자리는 흰 원 위에 있어야 한다.
@@ -344,7 +378,7 @@ console.log("\n[12] 로고 가독성 (어두운 화면에서 묻히지 않는가
   T("팀 수가 20팀", Object.keys(X.TEAM_KO).length === 20);
 }
 
-console.log("\n[13] 홈 화면 앱(PWA) 구성");
+console.log("\n[14] 홈 화면 앱(PWA) 구성");
 try{
   const mfRaw = fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8");
   const mf = JSON.parse(mfRaw);
@@ -371,7 +405,7 @@ try{
   T("하단 탭도 safe-area 대응", /env\(safe-area-inset-bottom\)/.test(html));
 }catch(e){ T("PWA 구성", false, e.message); }
 
-console.log("\n[14] 사내 정보 누출 검사 (AC-13)");
+console.log("\n[15] 사내 정보 누출 검사 (AC-13)");
 const banned = ["fnf","dcs","dcsai","kg/","snowflake","mlb","discovery","duvetica","sergio",
   "internal","사내","dcs_sk","x-access-token","weekly dashboard"];
 const lower = html.toLowerCase();

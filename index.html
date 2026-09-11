@@ -1044,9 +1044,12 @@ async function openTeam(id){
   bindClose();
 
   try{
-    const [rosterRaw, schedRaw] = await Promise.all([
+    // 팀 일정 API 는 기본 호출이 '치른 경기'만 준다. 예정 경기는 fixture=true 로 따로 받는다.
+    const schedUrl = API + "/site/v2/sports/soccer/eng.1/teams/" + id + "/schedule";
+    const [rosterRaw, schedPast, schedNext] = await Promise.all([
       getJSON(API + "/site/v2/sports/soccer/eng.1/teams/" + id + "/roster"),
-      getJSON(API + "/site/v2/sports/soccer/eng.1/teams/" + id + "/schedule").catch(() => ({events:[]}))
+      getJSON(schedUrl).catch(() => ({events:[]})),
+      getJSON(schedUrl + "?fixture=true").catch(() => ({events:[]}))
     ]);
     const groups = rosterRaw.athletes || [];
     const flat = groups.length && groups[0].items
@@ -1072,7 +1075,7 @@ async function openTeam(id){
           h: f.homeId, a: f.awayId, hs: f.homeScore, as: f.awayScore
         }));
       } else {
-        rows = (schedRaw.events || []).slice(-6).map(ev => {
+        const toRow = ev => {
           const c = (ev.competitions || [])[0];
           if (!c) return null;
           const h = c.competitors.find(x => x.homeAway === "home");
@@ -1083,7 +1086,12 @@ async function openTeam(id){
             h: String(h.team.id), a: String(a.team.id),
             hs: compScore(h), as: compScore(a)
           };
-        }).filter(Boolean);
+        };
+        const past = (schedPast.events || []).map(toRow).filter(Boolean)
+          .filter(r => r.post).slice(-3);
+        const next = (schedNext.events || []).map(toRow).filter(Boolean)
+          .filter(r => !r.post).slice(0, 4);
+        rows = past.concat(next);
       }
     }catch(err){ rows = []; }
 
