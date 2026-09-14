@@ -49,7 +49,7 @@ const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
 const m = html.match(/<script>([\s\S]*?)<\/script>/);
 if (!m) { console.error("index.html 에서 script 블록을 찾지 못했습니다"); process.exit(1); }
 let code = m[1];
-if (FAST) code = code.replace(/simRuns:\s*10000/, "simRuns: 1000");
+if (FAST) code = code.replace(/simRuns:\s*\d+/, "simRuns: 1000");
 
 const ctx = {
   document, sessionStorage, fetch, console, setTimeout, clearTimeout,
@@ -60,7 +60,7 @@ const ctx = {
 };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
-vm.runInContext(code + "\n;globalThis.__x = {TBL_W,TBL_WD,gauss,liveAlreadyCounted,renderFixtures,recalcAll,renderForecast,openTeam,openFixtures,renderFixtures,renderTable,renderLeaderboard,evState,compScore,getJSON,API,teamPoints,scoreOne,rankPlayers,matchProbs,simulate,buildElo,applyPlayedMatches,resolveTeamId,resolvePredictions,fetchStandings,fetchAllFixtures,rankMapFrom,S,CFG,PREDICTIONS,TEAM_KO};", ctx);
+vm.runInContext(code + "\n;globalThis.__x = {gauss,poisson,liveAlreadyCounted,renderFixtures,recalcAll,renderForecast,openTeam,openFixtures,renderTable,renderLeaderboard,evState,compScore,getJSON,API,teamPoints,scoreOne,rankPlayers,matchProbs,expectedGoals,simulate,buildModel,histBySeason,headToHead,parseEvents,parseOdds,americanToDecimal,resolveTeamId,resolvePredictions,fetchStandings,fetchAllFixtures,rankMapFrom,S,CFG,PREDICTIONS,TEAM_KO};", ctx);
 const X = ctx.__x;
 
 /* ============================================================ */
@@ -115,25 +115,54 @@ T("총점 우선", tie[0].name === "라" && tie[0].rank === 1);
 T("총점 같으면 정확 개수", tie[1].name === "나" && tie[1].rank === 2);
 T("그다음 5위권 적중 개수", tie[2].name === "가" && tie[3].name === "다");
 
-console.log("\n[4] 경기 확률 모델");
-const even = X.matchProbs(1500,1500);
-const sum = even.pW + even.pD + even.pL;
-T("확률 합 = 1", Math.abs(sum-1) < 1e-9, "합 " + sum);
-T("실력 동일 + 홈이점 -> 홈 우세", even.pW > even.pL);
-T("무승부율이 현실 범위(20~30%)", even.pD > 0.20 && even.pD < 0.30, (even.pD*100).toFixed(1) + "%");
-const gap = X.matchProbs(1800,1300);
-T("강팀 승률 > 80%", gap.pW > 0.80, (gap.pW*100).toFixed(1) + "%");
-T("실력차 크면 무승부 감소", gap.pD < even.pD);
-const away = X.matchProbs(1300,1800);
-T("원정 약팀 승률 < 10%", away.pW < 0.10, (away.pW*100).toFixed(1) + "%");
-// 시뮬이 쓰는 룩업표가 원래 수식과 일치하는지 (파리티)
-let tblErr = 0;
-for (let dr = -700; dr <= 700; dr += 7){
-  const exact = X.matchProbs(1500 + dr - X.CFG.homeAdv, 1500);
-  const i = ((dr + 800) / 2) | 0;
-  tblErr = Math.max(tblErr, Math.abs(X.TBL_W[i] - exact.pW), Math.abs(X.TBL_WD[i] - (exact.pW+exact.pD)));
+console.log("\n[4] 배당 · 난수 · 내장 과거 데이터 (단위)");
+T("미국식 +135 → 소수 2.35", Math.abs(X.americanToDecimal("+135") - 2.35) < 1e-9);
+T("미국식 -330 → 소수 1.303", Math.abs(X.americanToDecimal(-330) - (1 + 100/330)) < 1e-9);
+T("잘못된 배당은 null", X.americanToDecimal(null) === null && X.americanToDecimal("abc") === null && X.americanToDecimal(0) === null);
+const synthOdds = X.parseOdds({odds:[{provider:{name:"TestBook"},
+  moneyline:{home:{open:{odds:"+145"}, close:{odds:"+135"}}, away:{open:{odds:"+195"}}},
+  drawOdds:{moneyLine:255, link:{href:"https://example.invalid"}}}]});
+T("배당 파싱 — close 우선, 없으면 open",
+  !!synthOdds && Math.abs(synthOdds.h-2.35) < 1e-9 && Math.abs(synthOdds.a-2.95) < 1e-9 && Math.abs(synthOdds.d-3.55) < 1e-9,
+  JSON.stringify(synthOdds));
+T("배당 확률은 마진을 걷어내 합 1", !!synthOdds && Math.abs(synthOdds.pH+synthOdds.pD+synthOdds.pA-1) < 1e-9);
+T("세 배당 중 하나라도 없으면 쓰지 않음",
+  X.parseOdds({odds:[{moneyline:{home:{close:{odds:"+135"}}}, drawOdds:{moneyLine:255}}]}) === null && X.parseOdds({}) === null);
+T("배당 파싱이 베팅 링크를 들고 오지 않음", !!synthOdds && !JSON.stringify(synthOdds).includes("http"));
+// 유효슈팅 0:0 은 기록 누락으로 본다 (실제로 23-24·24-25 에 골이 난 경기 22건이 0:0 으로 찍혀 있다)
+const synthEv = (hs, as) => ({id:"1", date:"2026-09-14T19:00Z", status:{type:{state:"post"}}, competitions:[{competitors:[
+  {homeAway:"home", team:{id:1}, score:"3", statistics:[{name:"shotsOnTarget", displayValue:String(hs)}]},
+  {homeAway:"away", team:{id:2}, score:"1", statistics:[{name:"shotsOnTarget", displayValue:String(as)}]}]}]});
+const evZero = X.parseEvents([synthEv(0,0)])[0], evOk = X.parseEvents([synthEv(6,2)])[0];
+T("유효슈팅 0:0 은 결측(-1) 처리", evZero.homeSot === -1 && evZero.awaySot === -1);
+T("정상 유효슈팅은 그대로", evOk.homeSot === 6 && evOk.awaySot === 2);
+T("날짜 번호는 UTC 기준", evOk.day === Math.floor(Date.UTC(2026,8,14)/86400000), String(evOk.day));
+// 포아송 난수
+{
+  const lamT = 1.4, NP = 40000;
+  let s1 = 0, s2 = 0;
+  for (let i = 0; i < NP; i++){ const k = X.poisson(lamT); s1 += k; s2 += k*k; }
+  const pm = s1/NP, pv = s2/NP - pm*pm;
+  T("포아송 난수 평균·분산 = λ", Math.abs(pm-lamT) < 0.04 && Math.abs(pv-lamT) < 0.08,
+    "평균 " + pm.toFixed(3) + ", 분산 " + pv.toFixed(3));
 }
-T("확률 룩업표가 수식과 일치 (오차 < 0.005)", tblErr < 0.005, "최대오차 " + tblErr.toFixed(5));
+// 내장 과거 3시즌
+{
+  const hist = X.histBySeason();
+  const seasons = Object.keys(hist);
+  T("내장 과거 데이터 = 23-24·24-25·25-26", seasons.join(",") === "2023,2024,2025", seasons.join(","));
+  T("시즌마다 380경기", seasons.every(y => hist[y].length === 380), seasons.map(y => hist[y].length).join(","));
+  T("시즌마다 20팀 · 팀당 38경기", seasons.every(y => {
+    const c = {};
+    hist[y].forEach(r => { c[r.h] = (c[r.h]||0) + 1; c[r.a] = (c[r.a]||0) + 1; });
+    const v = Object.values(c);
+    return v.length === 20 && v.every(x => x === 38);
+  }));
+  T("값이 전부 정수 · 득점 0 이상", seasons.every(y => hist[y].every(r =>
+    [r.day, r.hg, r.ag, r.hs, r.as].every(Number.isInteger) && r.hg >= 0 && r.ag >= 0)));
+  T("시즌 순서대로 날짜가 이어짐",
+    hist["2023"][379].day < hist["2024"][0].day && hist["2024"][379].day < hist["2025"][0].day);
+}
 // 정규분포 샘플러
 const gs = []; for (let i=0;i<20000;i++) gs.push(X.gauss());
 const gm = gs.reduce((a,b)=>a+b,0)/gs.length;
@@ -184,36 +213,60 @@ if (cur){
   T("리그 전체 득점 = 실점", totGf === totGa, totGf + " vs " + totGa);
 }
 
-console.log("\n[7] Elo 구성");
-let elo;
-if (cur && prev && fixtures){
-  elo = X.buildElo(prev, cur);
-  const promoted = cur.filter(t => !prev.some(p => p.id === t.id));
-  T("승격팀이 식별됨", promoted.length > 0, promoted.map(t=>t.short).join(", "));
-  T("승격팀은 기본 Elo", promoted.every(t => elo[t.id] === X.CFG.promotedElo));
-  // 강등팀은 26-27 Elo 맵에 없는 것이 정상 -> 잔류팀끼리만 비교
-  const stayed = prev.filter(p => cur.some(c => c.id === p.id));
-  const best = stayed[0], worst = stayed[stayed.length-1];
-  T("전시즌 성적 순서가 Elo 순서와 일치 (잔류팀)", elo[best.id] > elo[worst.id],
-    best.short+" "+Math.round(elo[best.id])+" vs "+worst.short+" "+Math.round(elo[worst.id]));
-  T("강등팀은 Elo 맵에 없음",
-    prev.filter(p => !cur.some(c => c.id === p.id)).every(p => elo[p.id] === undefined),
-    prev.filter(p => !cur.some(c => c.id === p.id)).map(p=>p.short).join(", "));
-  const before = {...elo};
-  elo = X.applyPlayedMatches(elo, fixtures);
-  const moved = Object.keys(elo).filter(k => Math.abs(elo[k]-before[k]) > 0.01).length;
-  T("치른 경기로 Elo가 갱신됨", moved === 20, moved + "팀 이동");
-  const tot0 = Object.values(before).reduce((a,b)=>a+b,0);
-  const tot1 = Object.values(elo).reduce((a,b)=>a+b,0);
-  T("Elo 총합 보존 (제로섬)", Math.abs(tot0-tot1) < 1, Math.abs(tot0-tot1).toFixed(3));
-  T("모든 Elo가 유한값", Object.values(elo).every(Number.isFinite));
-  const top = Object.entries(elo).sort((a,b)=>b[1]-a[1]).slice(0,5)
-    .map(([id,v]) => (X.TEAM_KO[id]?X.TEAM_KO[id].ko:id)+" "+Math.round(v));
-  console.log("        Elo 상위: " + top.join("  "));
+console.log("\n[7] 전력 모델 구성");
+let model;
+// 기대득점 = exp(c + 공격[나] − 수비[상대]) 이므로 수비 값이 클수록 덜 먹힌다 → 전력 = 공격 + 수비
+const rating = id => model.strength[id].att + model.strength[id].def;
+const koOf = id => (X.TEAM_KO[id] ? X.TEAM_KO[id].ko : id);
+if (cur && fixtures){
+  const tm = Date.now();
+  model = X.buildModel(cur, fixtures);
+  const fitMs = Date.now() - tm;
+  T("모델 적합 1초 이내", fitMs < 1000, fitMs + "ms");
+  if (prev){
+    // 내장한 25-26 경기로 승점을 다시 세면 ESPN 최종 순위표와 원단위로 같아야 한다
+    const pts = {};
+    X.histBySeason()[X.CFG.prevSeason].forEach(r => {
+      pts[r.h] = (pts[r.h]||0) + (r.hg > r.ag ? 3 : r.hg === r.ag ? 1 : 0);
+      pts[r.a] = (pts[r.a]||0) + (r.ag > r.hg ? 3 : r.hg === r.ag ? 1 : 0);
+    });
+    const bad = prev.filter(t => pts[t.id] !== t.pts);
+    T("내장 25-26 경기로 센 승점 = ESPN 최종 순위표 (20팀)", bad.length === 0,
+      bad.map(t => t.short + " " + pts[t.id] + "≠" + t.pts).join(", "));
+    const releg = prev.filter(p => !cur.some(c => c.id === p.id)).map(p => p.id).sort();
+    T("강등팀 = 전시즌 순위표에만 있는 팀", model.relegated.slice().sort().join() === releg.join(),
+      model.relegated.map(koOf).join(", "));
+  }
+  T("승격팀 3팀 식별", model.promoted.length === 3, model.promoted.map(koOf).join(", "));
+  T("치른 경기가 전부 학습에 들어감",
+    model.played === fixtures.filter(f => f.state === "post").length, model.played + "경기");
+  T("학습 기준일 = 마지막으로 치른 경기 날짜",
+    model.refDay === Math.max.apply(null, fixtures.filter(f => f.state === "post").map(f => f.day)));
+  T("20팀 모두 공격·수비력이 유한값",
+    cur.every(t => model.strength[t.id] && Number.isFinite(model.strength[t.id].att) && Number.isFinite(model.strength[t.id].def)));
+  T("홈 이점이 양수이고 과하지 않음", model.h > 0 && model.h < 0.5, model.h.toFixed(3));
+  let gsum = 0, gn = 0;
+  cur.forEach(a => cur.forEach(b => {
+    if (a.id === b.id) return;
+    const g = X.expectedGoals(model, a.id, b.id);
+    gsum += g[0] + g[1]; gn++;
+  }));
+  T("경기당 평균 기대득점이 현실 범위(2.3~3.3골)", gsum/gn > 2.3 && gsum/gn < 3.3, (gsum/gn).toFixed(2));
+
+  const byR = cur.slice().sort((a,b) => rating(b.id) - rating(a.id));
+  const pe = X.matchProbs(model, byR[10].id, byR[10].id);
+  T("승무패 확률 합 = 1", Math.abs(pe.pW + pe.pD + pe.pL - 1) < 1e-9);
+  T("같은 전력이면 홈 우세", pe.pW > pe.pL);
+  T("같은 전력 무승부율 20~32%", pe.pD > 0.20 && pe.pD < 0.32, (pe.pD*100).toFixed(1) + "%");
+  const strongHome = X.matchProbs(model, byR[0].id, byR[19].id);
+  const weakHome = X.matchProbs(model, byR[19].id, byR[0].id);
+  T("최강 홈 vs 최약 원정 → 홈승 60% 이상", strongHome.pW > 0.6, (strongHome.pW*100).toFixed(1) + "%");
+  T("최약 홈 vs 최강 원정 → 홈승 25% 이하", weakHome.pW < 0.25, (weakHome.pW*100).toFixed(1) + "%");
+  console.log("        전력 상위: " + byR.slice(0,5).map(t => koOf(t.id) + " " + rating(t.id).toFixed(2)).join("  "));
 }
 
-console.log("\n[8] 몬테카를로 시뮬레이션" + (FAST ? " (1000회)" : " (10000회)"));
-if (cur && fixtures && elo){
+console.log("\n[8] 몬테카를로 시뮬레이션 (" + X.CFG.simRuns + "회)");
+if (cur && fixtures && model){
   X.S.cur = cur; cur.forEach(t => { X.S.byId[t.id] = t; });
   const players = X.resolvePredictions();
   T("예측 팀 이름이 전부 해석됨", X.S.unresolved.length === 0, X.S.unresolved.join(", "));
@@ -221,7 +274,7 @@ if (cur && fixtures && elo){
 
   const s0 = Date.now();
   const sim = await new Promise(res =>
-    X.simulate(cur, fixtures, elo, X.CFG.simRuns, null, res));
+    X.simulate(cur, fixtures, model, X.CFG.simRuns, null, res));
   const ms = Date.now() - s0;
   T("시뮬 3초 이내 완료 (AC-6)", ms < 3000, ms + "ms");
   const p5 = sim.teams.reduce((s,t)=>s+t.top5, 0);
@@ -234,9 +287,11 @@ if (cur && fixtures && elo){
   T("기대 점수가 0~30", sim.players.every(p => p.avg>=0 && p.avg<=30));
   T("대표 시나리오가 1~20위 완전순열",
     JSON.stringify(Object.values(sim.projRank).sort((a,b)=>a-b)) === JSON.stringify([...Array(20)].map((_,i)=>i+1)));
-  const strongest = Object.entries(elo).sort((a,b)=>b[1]-a[1])[0][0];
+  const strongest = cur.slice().sort((a,b) => rating(b.id) - rating(a.id))[0].id;
   const st = sim.teams.find(t => t.id === strongest);
-  T("Elo 최강팀의 top5 확률이 50% 이상", st.top5 > 0.5, (st.top5*100).toFixed(1)+"%");
+  T("전력 최강팀의 top5 확률이 50% 이상", st.top5 > 0.5, koOf(strongest) + " " + (st.top5*100).toFixed(1)+"%");
+  T("배당 사용 경기 = 배당이 나온 예정 경기 전부",
+    sim.oddsUsed === fixtures.filter(f => f.state === "pre" && f.odds).length, sim.oddsUsed + "경기");
   T("어떤 팀도 확률 100%가 아님 — 실력 불확실성이 반영됨",
     sim.teams.every(t => t.top5 < 0.995),
     sim.teams.filter(t=>t.top5>=0.995).map(t=>(X.TEAM_KO[t.id]?X.TEAM_KO[t.id].ko:t.id)+" "+(t.top5*100).toFixed(1)+"%").join(", "));
@@ -319,6 +374,33 @@ if (cur && fixtures){
     (fxBox.innerHTML.match(/class="fx"/g) || []).length > 10,
     (fxBox.innerHTML.match(/class="fx"/g) || []).length + "개");
   T("일정에도 팀 로고가 들어감", fxBox.innerHTML.indexOf("teamlogos/soccer") >= 0);
+
+  // 배당 · 출처 · 맞대결
+  const fxHtml = fxBox.innerHTML;
+  const shown = fixtures.filter(f => f.state === "pre").slice(0, 20);
+  const shownOdds = shown.filter(f => f.odds).length;
+  T("다가올 경기에 배당 3개(홈·무·원정)씩 붙음",
+    (fxHtml.match(/class="od(?: fav)?"/g) || []).length === shownOdds * 3,
+    (fxHtml.match(/class="od(?: fav)?"/g) || []).length + " / 기대 " + shownOdds * 3);
+  T("배당이 아직 없는 경기는 '배당 -'",
+    (fxHtml.match(/배당 -/g) || []).length === shown.length - shownOdds,
+    (fxHtml.match(/배당 -/g) || []).length + " / 기대 " + (shown.length - shownOdds));
+  T("경기마다 유력 결과(가장 낮은 배당)가 강조됨",
+    (fxHtml.match(/class="od fav"/g) || []).length >= shownOdds);
+  T("배당 출처가 탭 맨 위에 표기",
+    shownOdds === 0 || fxHtml.indexOf('<div class="fx-src">배당 DraftKings · ESPN 경유') === 0, fxHtml.slice(0, 90));
+  T("베팅 사이트 링크를 노출하지 않음", !/draftkings\.com|sportsbook|href=/i.test(fxHtml));
+  T("다가올 경기에 최근 맞대결 전적이 붙음", /class="h2h">맞대결 /.test(fxHtml));
+  const cssFx = html.slice(html.indexOf("<style>"), html.indexOf("</style>")).replace(/\s+/g, "");
+  T("배당 출처 스타일 — 오른쪽 정렬 · 작은 글씨", /\.fx-src\{text-align:right;font-size:10\.5px/.test(cssFx));
+  {
+    // 맞대결 집계 교차검증: 승+무+패 = 경기 수, 홈·원정을 바꾸면 승패가 뒤집힌다
+    const f = shown[0];
+    const a = X.headToHead(f.homeId, f.awayId, 5), b = X.headToHead(f.awayId, f.homeId, 5);
+    T("맞대결 승+무+패 = 경기 수, 최대 5", a.w + a.d + a.l === a.n && a.n <= 5, JSON.stringify(a));
+    T("맞대결을 반대편에서 보면 승패가 뒤집힘", a.w === b.l && a.l === b.w && a.d === b.d,
+      JSON.stringify(a) + " vs " + JSON.stringify(b));
+  }
 }
 
 console.log("\n[12] 팀 시트 — 예정 경기가 나오는가");
@@ -392,9 +474,9 @@ if (cur && fixtures){
     "gp합 " + curLive.reduce((a,t)=>a+t.gp,0) + " vs 기대 " + (played + LIVE_N) * 2);
 
   // 시뮬레이션이 실제로 그 경기를 빼는지 — 이중 계산 방지의 핵심
-  const elo2 = X.applyPlayedMatches(X.buildElo(prev, cur), fixtures);
-  const runA = await new Promise(res => X.simulate(cur, synth, elo2, 200, null, res));
-  const runB = await new Promise(res => X.simulate(curLive, synth, elo2, 200, null, res));
+  const model2 = X.buildModel(cur, fixtures);
+  const runA = await new Promise(res => X.simulate(cur, synth, model2, 200, null, res));
+  const runB = await new Promise(res => X.simulate(curLive, synth, model2, 200, null, res));
   T("미반영이면 진행 중 경기도 시뮬레이션한다",
     runA.skippedLive === false && runA.remaining === 380 - played,
     "남은 " + runA.remaining + " / 기대 " + (380 - played));
@@ -522,6 +604,29 @@ T("호출 도메인이 ESPN 뿐 (데이터 + 로고 CDN)",
   [...html.matchAll(/https?:\/\/([a-z0-9.\-]+)/gi)].map(x=>x[1])
     .every(h => h.endsWith("espn.com") || h.endsWith("espncdn.com")),
   [...new Set([...html.matchAll(/https?:\/\/([a-z0-9.\-]+)/gi)].map(x=>x[1]))].join(", "));
+
+console.log("\n[18] 배당 반영 스위치");
+if (cur && fixtures && model){
+  const preOdds = fixtures.filter(f => f.state === "pre" && f.odds).length;
+  X.CFG.useOdds = false;
+  const off = await new Promise(res => X.simulate(cur, fixtures, model, 300, null, res));
+  X.CFG.useOdds = true;
+  const on = await new Promise(res => X.simulate(cur, fixtures, model, 300, null, res));
+  T("useOdds 끄면 배당 경기 0", off.oddsUsed === 0);
+  T("useOdds 켜면 배당 있는 예정 경기 전부 사용", on.oddsUsed === preOdds, on.oddsUsed + " / " + preOdds);
+  // 배당 확률이 실제로 결과를 좌우하는지: 한 경기의 배당만 홈 98% ↔ 원정 98% 로 바꾸면
+  // 그 홈팀 기대 승점 차이가 이론값 (0.98×3+0.01) − (0.01×3+0.01) = 2.91 근처여야 한다
+  const f0 = fixtures.find(f => f.state === "pre" && f.odds);
+  if (f0){
+    const withOdds = (pH, pD, pA) => fixtures.map(f =>
+      f === f0 ? Object.assign({}, f, { odds: Object.assign({}, f.odds, { pH, pD, pA }) }) : f);
+    const RUNS = 4000;
+    const a = await new Promise(res => X.simulate(cur, withOdds(0.98, 0.01, 0.01), model, RUNS, null, res));
+    const b = await new Promise(res => X.simulate(cur, withOdds(0.01, 0.01, 0.98), model, RUNS, null, res));
+    const diff = a.teams.find(t => t.id === f0.homeId).expPts - b.teams.find(t => t.id === f0.homeId).expPts;
+    T("배당 확률이 시뮬레이션에 실제로 반영됨 (기대승점 차 ≈ 2.91)", Math.abs(diff - 2.91) < 0.6, diff.toFixed(2));
+  }
+}
 
 console.log("\n" + "=".repeat(52));
 console.log("  통과 " + pass + " / 실패 " + fail);
