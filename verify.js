@@ -320,7 +320,7 @@ if (cur && fixtures && model){
 console.log("\n[10] 엔드포인트별 응답 구조 차이 (회귀 방지)");
 try{
   // scoreboard: status 가 event 레벨, score 는 문자열
-  const sb = await X.getJSON(X.API + "/site/v2/sports/soccer/eng.1/scoreboard?dates=20260901-20260930");
+  const sb = await X.getJSON(X.API + "/site/v2/sports/soccer/eng.1/scoreboard?dates=202609");
   const e1 = sb.events[0], c1 = e1.competitions[0];
   T("scoreboard — status 는 event 레벨", !!(e1.status && e1.status.type));
   T("scoreboard — state 를 읽어냄", ["pre","in","post"].includes(X.evState(e1, c1)), X.evState(e1,c1));
@@ -626,6 +626,53 @@ if (cur && fixtures && model){
     const diff = a.teams.find(t => t.id === f0.homeId).expPts - b.teams.find(t => t.id === f0.homeId).expPts;
     T("배당 확률이 시뮬레이션에 실제로 반영됨 (기대승점 차 ≈ 2.91)", Math.abs(diff - 2.91) < 0.6, diff.toFixed(2));
   }
+}
+
+console.log("\n[19] 일정 수신 실패가 조용히 빈 화면이 되지 않는가");
+{
+  // 실제 호출 URL 을 가로채 기록·조작한다. 끝나면 원래 fetch 로 되돌린다.
+  const realFetch = ctx.fetch;
+  const called = [];
+  const stub = (status, onlyMonth) => {
+    ctx.fetch = async (url) => {
+      called.push(url);
+      const hit = !onlyMonth || url.includes("dates=" + onlyMonth);
+      if (hit && status !== 200) return { ok:false, status, json: async () => ({}) };
+      return realFetch(url);
+    };
+  };
+  const clearCache = () => Object.keys(store).forEach(k => delete store[k]);
+  const threw = async fn => { try { await fn(); return null; } catch(e){ return e; } };
+
+  // (a) dates 파라미터가 월 형식이어야 한다 — 범위 형식은 ESPN 이 400 으로 거절한다
+  clearCache(); called.length = 0;
+  stub(200);
+  await X.fetchAllFixtures().catch(() => {});
+  const dates = called.filter(u => u.includes("scoreboard?dates="))
+                      .map(u => u.split("dates=")[1]);
+  T("일정 요청이 월 형식(YYYYMM) — 범위 형식 회귀 방지",
+    dates.length > 0 && dates.every(d => /^[0-9]{6}$/.test(d)), dates.slice(0,3).join(", "));
+
+  // (b) 전부 실패하면 빈 배열이 아니라 에러여야 한다
+  clearCache();
+  stub(400);
+  const eAll = await threw(() => X.fetchAllFixtures());
+  T("모든 달이 실패하면 에러를 던진다 (빈 일정으로 넘어가지 않음)",
+    !!eAll, eAll ? eAll.message : "에러 없이 통과함");
+
+  // (c) 한 달만 실패해도 일정에 구멍이 나므로 에러여야 한다
+  clearCache();
+  stub(400, "202610");
+  const eOne = await threw(() => X.fetchAllFixtures());
+  T("한 달만 실패해도 에러를 던진다 (구멍 난 일정으로 예측하지 않음)",
+    !!eOne, eOne ? eOne.message : "에러 없이 통과함");
+
+  // (d) 정상일 때는 당연히 그대로 동작해야 한다
+  ctx.fetch = realFetch;
+  clearCache();
+  const ok = await X.fetchAllFixtures();
+  T("정상 응답일 때는 시즌 일정을 그대로 돌려준다",
+    Array.isArray(ok) && ok.length === 380, (ok || []).length + "경기");
 }
 
 console.log("\n" + "=".repeat(52));

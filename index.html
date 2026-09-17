@@ -459,7 +459,9 @@ function parseStandings(raw){
 const fetchStandings = season =>
   getJSON(API + "/v2/sports/soccer/eng.1/standings?season=" + season).then(parseStandings);
 
-const ymd = d => d.getFullYear() + String(d.getMonth()+1).padStart(2,"0") + String(d.getDate()).padStart(2,"0");
+/* ESPN scoreboard 의 dates 는 YYYYMM(월 단위)만 받는다.
+   YYYYMMDD-YYYYMMDD 범위 형식은 400 "Failed to get events endpoint" 로 거절된다. */
+const ym = d => d.getUTCFullYear() + String(d.getUTCMonth()+1).padStart(2,"0");
 
 /* ESPN 은 엔드포인트마다 경기 응답 모양이 다르다.
    scoreboard: status 가 event 에, score 는 문자열
@@ -540,17 +542,21 @@ async function fetchAllFixtures(onStep){
   // 26-27 시즌 전체를 월 단위로 긁는다 (2026-08 ~ 2027-06)
   const months = [];
   for (let i = 0; i < 11; i++){
-    const from = new Date(Date.UTC(2026, 7 + i, 1));
-    const to   = new Date(Date.UTC(2026, 8 + i, 0));
-    months.push(ymd(from) + "-" + ymd(to));
+    months.push(ym(new Date(Date.UTC(2026, 7 + i, 1))));
   }
   let done = 0;
-  const chunks = await Promise.all(months.map(async range => {
-    const d = await getJSON(API + "/site/v2/sports/soccer/eng.1/scoreboard?dates=" + range)
-      .catch(() => ({events:[]}));
+  const failed = [];
+  const chunks = await Promise.all(months.map(async month => {
+    const d = await getJSON(API + "/site/v2/sports/soccer/eng.1/scoreboard?dates=" + month)
+      .catch(e => { failed.push(month + " " + e.message); return {events:[]}; });
     done++; if (onStep) onStep(done, months.length);
     return d.events || [];
   }));
+  // 한 달이라도 못 받으면 일정에 구멍이 난 채로 예측까지 틀어진다.
+  // 조용히 빈 화면을 내놓지 말고 이유를 드러낸다 (26-09: ESPN 이 날짜 형식을 바꿔 전부 400 이 났다).
+  if (failed.length)
+    throw new Error("ESPN 일정 " + failed.length + "/" + months.length +
+                    "개월 응답 오류 — " + failed[0]);
   const seen = new Set();
   const out = parseEvents([].concat.apply([], chunks)).filter(f => {
     if (seen.has(f.id)) return false;
@@ -558,6 +564,7 @@ async function fetchAllFixtures(onStep){
     return true;
   });
   out.sort((a,b) => new Date(a.date) - new Date(b.date));
+  if (!out.length) throw new Error("ESPN 이 26-27 시즌 경기를 하나도 주지 않았습니다");
   return out;
 }
 
